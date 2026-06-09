@@ -60,6 +60,17 @@ Route::group([
         Route::post('/chmod', [Wings\FileController::class, 'chmod']);
         Route::post('/pull', [Wings\FileController::class, 'pull'])->middleware(['throttle:10,5']);
         Route::get('/upload', Wings\FileUploadController::class);
+
+        Route::group(['prefix' => '/trash'], function () {
+            Route::get('/', [Wings\FileTrashController::class, 'index']);
+            Route::get('/count', [Wings\FileTrashController::class, 'count']);
+            Route::post('/', [Wings\FileTrashController::class, 'store']);
+            Route::post('/{trashedFile}/restore', [Wings\FileTrashController::class, 'restore']);
+            Route::post('/bulk-restore', [Wings\FileTrashController::class, 'bulkRestore']);
+            Route::post('/bulk-delete', [Wings\FileTrashController::class, 'bulkDestroy']);
+            Route::delete('/{trashedFile}', [Wings\FileTrashController::class, 'destroy']);
+            Route::delete('/', [Wings\FileTrashController::class, 'empty']);
+        });
     });
 
     Route::group(['prefix' => '/schedules'], function () {

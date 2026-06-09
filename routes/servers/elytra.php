@@ -58,6 +58,17 @@ Route::group([
         Route::post('/chmod', [Elytra\FileController::class, 'chmod']);
         Route::post('/pull', [Elytra\FileController::class, 'pull'])->middleware(['throttle:10,5']);
         Route::get('/upload', Elytra\FileUploadController::class);
+
+        Route::group(['prefix' => '/trash'], function () {
+            Route::get('/', [Elytra\FileTrashController::class, 'index']);
+            Route::get('/count', [Elytra\FileTrashController::class, 'count']);
+            Route::post('/', [Elytra\FileTrashController::class, 'store']);
+            Route::post('/{trashedFile}/restore', [Elytra\FileTrashController::class, 'restore']);
+            Route::post('/bulk-restore', [Elytra\FileTrashController::class, 'bulkRestore']);
+            Route::post('/bulk-delete', [Elytra\FileTrashController::class, 'bulkDestroy']);
+            Route::delete('/{trashedFile}', [Elytra\FileTrashController::class, 'destroy']);
+            Route::delete('/', [Elytra\FileTrashController::class, 'empty']);
+        });
     });
 
     Route::group(['prefix' => '/schedules'], function () {

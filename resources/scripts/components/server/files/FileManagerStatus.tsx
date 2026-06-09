@@ -10,7 +10,6 @@ import asDialog from '@/hoc/asDialog';
 
 import { ServerContext } from '@/state/server';
 
-// TODO: Make it more pretty
 const CircleProgress = ({ progress, className }: { progress: number; className?: string }) => {
     const radius = 12;
     const circumference = 2 * Math.PI * radius;
@@ -56,7 +55,12 @@ const FileUploadList = () => {
         <Tooltip.Provider>
             <div className={'space-y-2 mt-6'}>
                 {uploads.map(([name, file]) => (
-                    <div key={name} className={'flex items-center space-x-3 bg-zinc-700 p-3 rounded-sm'}>
+                    <div
+                        key={name}
+                        className={
+                            'flex items-center space-x-3 bg-[#ffffff08] border border-[#ffffff12] p-3 rounded-lg'
+                        }
+                    >
                         <Tooltip.Root delayDuration={200}>
                             <Tooltip.Trigger asChild>
                                 <div className={'shrink-0'}>
@@ -66,11 +70,11 @@ const FileUploadList = () => {
                             <Tooltip.Portal>
                                 <Tooltip.Content
                                     side='left'
-                                    className='px-2 py-1 text-sm bg-gray-800 text-gray-100 rounded shadow-lg z-9999'
+                                    className='px-2 py-1 text-sm bg-[#ffffff14] backdrop-blur-sm text-zinc-200 rounded shadow-lg z-9999 border border-[#ffffff12]'
                                     sideOffset={5}
                                 >
                                     {`${Math.floor((file.loaded / file.total) * 100)}%`}
-                                    <Tooltip.Arrow className='fill-gray-800' />
+                                    <Tooltip.Arrow className='fill-[#ffffff14]' />
                                 </Tooltip.Content>
                             </Tooltip.Portal>
                         </Tooltip.Root>
@@ -89,11 +93,11 @@ const FileUploadList = () => {
                             <Tooltip.Portal>
                                 <Tooltip.Content
                                     side='right'
-                                    className='px-2 py-1 text-sm bg-gray-800 text-red-400 rounded shadow-lg z-9999'
+                                    className='px-2 py-1 text-sm bg-[#ffffff14] backdrop-blur-sm text-red-400 rounded shadow-lg z-9999 border border-[#ffffff12]'
                                     sideOffset={5}
                                 >
                                     Cancel
-                                    <Tooltip.Arrow className='fill-gray-800' />
+                                    <Tooltip.Arrow className='fill-[#ffffff14]' />
                                 </Tooltip.Content>
                             </Tooltip.Portal>
                         </Tooltip.Root>
@@ -167,7 +171,7 @@ const FileManagerStatus = () => {
                         <Tooltip.Portal>
                             <Tooltip.Content
                                 side='top'
-                                className='px-2 py-1 text-sm bg-gray-800 text-gray-100 rounded shadow-lg'
+                                className='px-2 py-1 text-sm bg-[#ffffff14] backdrop-blur-sm text-zinc-200 rounded shadow-lg border border-[#ffffff12]'
                                 sideOffset={5}
                             >
                                 {`${count} files are uploading, click to view`}

@@ -1,3 +1,4 @@
+import { FileArrowUp, FolderArrowUp } from '@gravity-ui/icons';
 import axios from 'axios';
 import { useEffect, useRef, useState } from 'react';
 
@@ -5,6 +6,7 @@ import ActionButton from '@/components/elements/ActionButton';
 import { ModalMask } from '@/components/elements/Modal';
 import FadeTransition from '@/components/elements/transitions/FadeTransition';
 
+import createDirectory from '@/api/server/files/createDirectory';
 import getFileUploadUrl from '@/api/server/files/getFileUploadUrl';
 
 import { ServerContext } from '@/state/server';
@@ -21,8 +23,52 @@ function isFileOrDirectory(event: DragEvent): boolean {
     return event.dataTransfer.types.some((value) => value.toLowerCase() === 'files');
 }
 
+async function collectFilesFromEntry(
+    entry: FileSystemEntry,
+    basePath: string,
+): Promise<Array<{ file: File; path: string }>> {
+    const results: Array<{ file: File; path: string }> = [];
+
+    if (entry.isFile) {
+        const file = await new Promise<File>((resolve, reject) => {
+            (entry as FileSystemFileEntry).file(resolve, reject);
+        });
+        results.push({ file, path: basePath });
+    } else if (entry.isDirectory) {
+        const dirEntry = entry as FileSystemDirectoryEntry;
+        const dirPath = basePath ? `${basePath}/${entry.name}` : entry.name;
+        const reader = dirEntry.createReader();
+
+        const readAllEntries = (): Promise<FileSystemEntry[]> => {
+            return new Promise((resolve) => {
+                const allEntries: FileSystemEntry[] = [];
+                const readBatch = () => {
+                    reader.readEntries((entries) => {
+                        if (entries.length === 0) {
+                            resolve(allEntries);
+                        } else {
+                            allEntries.push(...entries);
+                            readBatch();
+                        }
+                    });
+                };
+                readBatch();
+            });
+        };
+
+        const entries = await readAllEntries();
+        for (const child of entries) {
+            const childResults = await collectFilesFromEntry(child, dirPath);
+            results.push(...childResults);
+        }
+    }
+
+    return results;
+}
+
 const UploadButton = () => {
     const fileUploadInput = useRef<HTMLInputElement>(null);
+    const folderUploadInput = useRef<HTMLInputElement>(null);
     const [timeouts, _] = useState<NodeJS.Timeout[]>([]);
     const [visible, setVisible] = useState(false);
     const { mutate } = useFileManagerSwr();
@@ -57,35 +103,149 @@ const UploadButton = () => {
         return () => timeouts.forEach(clearTimeout);
     }, []);
 
-    const onFileSubmission = (files: FileList) => {
+    const ensureDirectories = async (paths: string[]) => {
+        const uniqueDirs = [...new Set(paths)];
+        for (const dir of uniqueDirs) {
+            try {
+                await createDirectory(uuid, directory, dir);
+            } catch {
+                // Directory may already exist, continue
+            }
+        }
+    };
+
+    const uploadFile = (file: File, targetDir: string) => {
+        const controller = new AbortController();
+        const uploadKey = targetDir ? `${targetDir}/${file.name}` : file.name;
+        pushFileUpload({
+            name: uploadKey,
+            data: { abort: controller, loaded: 0, total: file.size },
+        });
+
+        return getFileUploadUrl(uuid).then((url) =>
+            axios
+                .post(
+                    url,
+                    { files: file },
+                    {
+                        signal: controller.signal,
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                        params: { directory: targetDir || directory },
+                    },
+                )
+                .then(() => timeouts.push(setTimeout(() => removeFileUpload(uploadKey), 500))),
+        );
+    };
+
+    const onFileSubmission = async (files: FileList) => {
         clearAndAddHttpError();
-        const list = Array.from(files);
-        if (list.some((file) => !file.size || (!file.type && file.size === 4096))) {
-            return addError('Folder uploads are not supported at this time.', 'Error');
+
+        // Check for folders via webkitRelativePath (from input webkitdirectory)
+        const hasFolders = Array.from(files).some((f) => f.webkitRelativePath);
+
+        // Check via DataTransferItem for drag events
+        if (!hasFolders) {
+            const regularFiles = Array.from(files).filter((file) => file.size > 0 && (file.type || file.size !== 4096));
+
+            const uploads = regularFiles.map((file) => () => uploadFile(file, directory));
+
+            Promise.all(uploads.map((fn) => fn()))
+                .then(() => mutate())
+                .catch((error) => {
+                    clearFileUploads();
+                    clearAndAddHttpError(error);
+                });
+            return;
         }
 
-        const uploads = list.map((file) => {
-            const controller = new AbortController();
-            pushFileUpload({
-                name: file.name,
-                data: { abort: controller, loaded: 0, total: file.size },
-            });
+        // Folder upload: group files by their relative directory
+        const filePaths: Array<{ file: File; relDir: string }> = [];
+        const dirsNeeded = new Set<string>();
 
-            return () =>
-                getFileUploadUrl(uuid).then((url) =>
-                    axios
-                        .post(
-                            url,
-                            { files: file },
-                            {
-                                signal: controller.signal,
-                                headers: { 'Content-Type': 'multipart/form-data' },
-                                params: { directory },
-                            },
-                        )
-                        .then(() => timeouts.push(setTimeout(() => removeFileUpload(file.name), 500))),
+        for (const file of Array.from(files)) {
+            if (!file.size || (!file.type && file.size === 4096)) continue;
+            const relPath = file.webkitRelativePath;
+            const parts = relPath ? relPath.split('/') : [file.name];
+            parts.pop();
+            const relDir = parts.join('/');
+
+            if (relDir) dirsNeeded.add(relDir);
+            filePaths.push({ file, relDir });
+        }
+
+        try {
+            await ensureDirectories([...dirsNeeded]);
+        } catch {
+            return addError('Failed to create folder structure.', 'Error');
+        }
+
+        const uploads = filePaths.map(
+            ({ file, relDir }) =>
+                () =>
+                    uploadFile(file, directory + (relDir ? '/' + relDir : '')),
+        );
+
+        Promise.all(uploads.map((fn) => fn()))
+            .then(() => mutate())
+            .catch((error) => {
+                clearFileUploads();
+                clearAndAddHttpError(error);
+            });
+    };
+
+    const onDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setVisible(false);
+
+        const items = e.dataTransfer?.items;
+        if (!items || items.length === 0) return;
+
+        // Collect all files from the drop using webkitGetAsEntry for folder support
+        const collected: Array<{ file: File; path: string }> = [];
+        const promises: Promise<void>[] = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.kind !== 'file') continue;
+            const entry = item.webkitGetAsEntry?.();
+            if (entry) {
+                promises.push(
+                    collectFilesFromEntry(entry, '').then((results) => {
+                        collected.push(...results);
+                    }),
                 );
-        });
+            } else {
+                const file = item.getAsFile();
+                if (file) collected.push({ file, path: '' });
+            }
+        }
+
+        await Promise.all(promises);
+
+        if (collected.length === 0) return;
+        clearAndAddHttpError();
+
+        const dirsNeeded = new Set<string>();
+        const uploadItems: Array<{ file: File; relDir: string }> = [];
+
+        for (const { file, path } of collected) {
+            if (file.size === 0 || (!file.type && file.size === 4096)) continue;
+            if (path) dirsNeeded.add(path);
+            uploadItems.push({ file, relDir: path });
+        }
+
+        try {
+            await ensureDirectories([...dirsNeeded]);
+        } catch {
+            return addError('Failed to create folder structure.', 'Error');
+        }
+
+        const uploads = uploadItems.map(
+            ({ file, relDir }) =>
+                () =>
+                    uploadFile(file, directory + (relDir ? '/' + relDir : '')),
+        );
 
         Promise.all(uploads.map((fn) => fn()))
             .then(() => mutate())
@@ -102,19 +262,10 @@ const UploadButton = () => {
                     className='flex'
                     onClick={() => setVisible(false)}
                     onDragOver={(e) => e.preventDefault()}
-                    // why doesn't vanilla pterodactyl have this?
                     onDragLeave={() => {
                         setVisible(false);
                     }}
-                    onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-
-                        setVisible(false);
-                        if (!e.dataTransfer?.files.length) return;
-
-                        onFileSubmission(e.dataTransfer.files);
-                    }}
+                    onDrop={onDrop}
                 >
                     <div className={'w-full flex items-center justify-center pointer-events-none'}>
                         <div
@@ -159,7 +310,6 @@ const UploadButton = () => {
                 className={`hidden`}
                 onChange={(e) => {
                     if (!e.currentTarget.files) return;
-
                     onFileSubmission(e.currentTarget.files);
                     if (fileUploadInput.current) {
                         fileUploadInput.current.files = null;
@@ -167,12 +317,36 @@ const UploadButton = () => {
                 }}
                 multiple
             />
-            <ActionButton
-                variant='secondary'
-                onClick={() => fileUploadInput.current && fileUploadInput.current.click()}
-            >
-                Upload
-            </ActionButton>
+            <input
+                type={'file'}
+                ref={folderUploadInput}
+                className={`hidden`}
+                onChange={(e) => {
+                    if (!e.currentTarget.files) return;
+                    onFileSubmission(e.currentTarget.files);
+                    if (folderUploadInput.current) {
+                        folderUploadInput.current.value = '';
+                    }
+                }}
+                webkitdirectory=''
+                multiple
+            />
+            <div className='flex flex-row gap-1'>
+                <ActionButton
+                    variant='secondary'
+                    onClick={() => folderUploadInput.current && folderUploadInput.current.click()}
+                    title='Upload Folder'
+                >
+                    <FolderArrowUp className='h-4 w-4' />
+                </ActionButton>
+                <ActionButton
+                    variant='secondary'
+                    onClick={() => fileUploadInput.current && fileUploadInput.current.click()}
+                    title='Upload File'
+                >
+                    <FileArrowUp className='h-4 w-4' />
+                </ActionButton>
+            </div>
         </>
     );
 };
